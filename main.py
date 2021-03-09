@@ -9,7 +9,10 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 import sqlite3
 import locale, datetime
+
 import asyncio
+from contextlib import suppress
+from aiogram.utils.exceptions import (MessageToEditNotFound, MessageCantBeEdited, MessageCantBeDeleted, MessageToDeleteNotFound)
 
 locale.setlocale(locale.LC_ALL, ('RU', 'utf-8'))
 TOKEN = None
@@ -19,7 +22,14 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 dp.middleware.setup(LoggingMiddleware())
 
-@dp.message_handler(commands=['start', 'Назад в главное меню'])
+
+async def delete_message(message: types.Message, sleep_time: int = 0):
+    await asyncio.sleep(sleep_time)
+    with suppress(MessageCantBeDeleted, MessageToDeleteNotFound):
+        await message.delete()
+    #asyncio.create_task(delete_message(msg, 0))
+
+@dp.message_handler(Text(equals=['/start','Назад']))
 async def cmd_start(message: types.Message):
     connection = sqlite3.connect("botbd.db")
     crsr = connection.cursor()
@@ -35,8 +45,9 @@ async def cmd_start(message: types.Message):
     starting_but2 = emojize(':chart_increasing:')+' Статистика текущего месяца'
     starting_but3 = emojize(':gear:')+' Настройки'
     starting_kb.add(starting_but1).add(starting_but2).add(starting_but3)
-    await message.answer('Привет! 👋\nЭто тестовая версия учета показателей счетчиков.\nИспользуйте кнопки ниже для работы бота.',reply_markup=starting_kb)
+    msg = await message.answer('Привет! 👋\nЭто тестовая версия учета показателей счетчиков.\nИспользуйте кнопки ниже для работы бота.',reply_markup=starting_kb)
     connection.close()
+
 class new_month_states(StatesGroup):
     elec = State()
     hot = State()
@@ -126,31 +137,28 @@ async def process_month_stats(message: types.Message):
             return lastMonth.strftime(n)
         sql_prev_month = "SELECT * FROM '%s' WHERE MONTH = '%s' AND YEAR = '%s';" %(kom_tab, prev_date("%m"), prev_date("%Y"))
         crsr.execute(sql_prev_month)
-        if not crsr.fetchone():
+        if not crsr.fetchone(): # No data for previous month
             msg_text = text(bold(datetime.date.today().strftime("%B %Y:")),
-                                    emojize(':high_voltage: ') + bold(result_cur_elec),
-                                    bold("Израсходовано: ") + code("неизвестно"),
-                                    emojize(':thermometer: ') + bold(result_cur_hot),
-                                    bold("Израсходовано: ") + code("неизвестно"),
-                                    emojize(':ice: ') + bold(result_cur_cold),
-                                    bold("Израсходовано: ") + code("неизвестно"), sep='\n')
+                                emojize(':high_voltage: ') + code(result_cur_elec),
+                                bold("Израсходовано: ") + code("неизвестно"),
+                                emojize(':thermometer: ') + code(result_cur_hot),
+                                bold("Израсходовано: ") + code("неизвестно"),
+                                emojize(':ice: ') + code(result_cur_cold),
+                                bold("Израсходовано: ") + code("неизвестно"), sep='\n')
         else:
-            sql_prev_elec = "SELECT ELECTRICITY FROM '%s' WHERE MONTH = '%s' AND YEAR = '%s';" %(kom_tab, prev_date("%m"), prev_date("%Y"))
-            crsr.execute(sql_prev_elec)
+            sql_prev_list = "SELECT ELECTRICITY, HOT, COLD FROM '%s' WHERE MONTH = '%s' AND YEAR = '%s';" %(kom_tab, prev_date("%m"), prev_date("%Y"))
+            crsr.execute(sql_prev_list)
             result_prev_elec = crsr.fetchone()[0] # ELEC for previous month
-            result_prev = crsr.fetchone() # Check for None
-            sql_prev_hot = "SELECT HOT FROM '%s' WHERE MONTH = '%s' AND YEAR = '%s';" %(kom_tab, prev_date("%m"), prev_date("%Y"))
-            crsr.execute(sql_prev_hot)
-            result_prev_hot = crsr.fetchone()[0] # HOT for previous month
-            sql_prev_cold = "SELECT COLD FROM '%s' WHERE MONTH = '%s' AND YEAR = '%s';" %(kom_tab, prev_date("%m"), prev_date("%Y"))
-            crsr.execute(sql_prev_cold)
-            result_prev_cold = crsr.fetchone()[0] # COLD for previous month
+            crsr.execute(sql_prev_list)
+            result_prev_hot = crsr.fetchone()[1] # HOT for previous month
+            crsr.execute(sql_prev_list)
+            result_prev_cold = crsr.fetchone()[2] # COLD for previous month
             msg_text = text(bold(datetime.date.today().strftime("%B %Y:")),
-                                emojize(':high_voltage: ') + bold(result_cur_elec),
+                                emojize(':high_voltage: ') + code(result_cur_elec),
                                 bold("Израсходовано: ") + code(str(int(result_cur_elec) - int(result_prev_elec)) + " кВт/ч"),
-                                emojize(':thermometer: ') + bold(result_cur_hot),
+                                emojize(':thermometer: ') + code(result_cur_hot),
                                 bold("Израсходовано: ") + code(str(int(result_cur_hot) - int(result_prev_hot)) + " м³"),
-                                emojize(':ice: ') + bold(result_cur_cold),
+                                emojize(':ice: ') + code(result_cur_cold),
                                 bold("Израсходовано: ") + code(str(int(result_cur_cold) - int(result_prev_cold)) + " м³"), sep='\n')
         await message.answer(msg_text,parse_mode=types.ParseMode.MARKDOWN)
     connection.close()
@@ -161,7 +169,7 @@ async def process_options(message: types.Message):
     options_kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     options_but1 = emojize(':cross_mark:')+' Удалить данные за ' + datetime.date.today().strftime("%B %Y").lower()
     options_but2 = emojize(':skull_and_crossbones:')+' Удалить все данные'
-    options_but3 = '/start'
+    options_but3 = 'Назад'
     options_kb.add(options_but1).add(options_but2).add(options_but3)
     await message.answer('Настройки',reply_markup=options_kb)
 
